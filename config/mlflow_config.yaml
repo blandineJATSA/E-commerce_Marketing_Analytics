@@ -1,0 +1,19 @@
+# config/mlflow_config.yaml
+mlflow:
+  tracking_uri: "sqlite:///mlflow/tracking/mlflow.db"
+  experiment_name: "e-commerce-segmentation"
+  model_registry_uri: "sqlite:///mlflow/models/models.db"
+  artifact_location: "mlflow/experiments"
+  
+experiments:
+  segmentation:
+    name: "customer_segmentation"
+    tags:
+      team: "marketing"
+      model_type: "clustering"
+  
+  churn:
+    name: "churn_prediction"
+    tags:
+      team: "retention"
+      model_type: "classification"

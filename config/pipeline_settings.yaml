@@ -1,0 +1,16 @@
+# config/pipeline_settings.yaml
+project:
+  name: "e-commerce-mlops"
+  version: "1.0.0"
+  description: "MLOps Pipeline for E-commerce Marketing Analytics"
+
+data:
+  raw_path: "data/raw/"
+  processed_path: "data/processed/"
+  features_path: "data/features/"
+  file_name: "online_retail_II.xlsx"
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/pipeline.log"

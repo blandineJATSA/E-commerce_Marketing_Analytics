@@ -1,0 +1,19 @@
+# config/airflow_config.yaml
+airflow:
+  dags_folder: "airflow/dags"
+  logs_folder: "airflow/logs"
+  plugins_folder: "airflow/plugins"
+  
+default_args:
+  owner: 'data-science-team'
+  depends_on_past: false
+  start_date: '2024-01-01'
+  email_on_failure: true
+  email_on_retry: false
+  retries: 1
+  retry_delay: 5  # minutes
+
+schedules:
+  daily_data_pipeline: '0 2 * * *'     # 2AM daily
+  weekly_model_training: '0 4 * * 1'   # 4AM Monday
+  monthly_model_evaluation: '0 6 1 * *' # 6AM 1st of month

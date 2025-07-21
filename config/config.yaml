@@ -1,0 +1,38 @@
+# config/config.yaml
+project:
+  name: "e-commerce-mlops"
+  version: "1.0.0"
+  description: "MLOps Pipeline for E-commerce Marketing Analytics"
+
+data:
+  raw_path: "data/raw/"
+  processed_path: "data/processed/"
+  features_path: "data/features/"
+  file_name: "online_retail_II.xlsx"
+
+mlflow:
+  tracking_uri: "sqlite:///mlflow/mlflow.db"
+  experiment_name: "e-commerce-segmentation"
+  model_registry_uri: "sqlite:///mlflow/models.db"
+  artifact_location: "mlflow/artifacts"
+
+airflow:
+  dags_folder: "airflow/dags"
+  logs_folder: "airflow/logs"
+  plugins_folder: "airflow/plugins"
+
+models:
+  segmentation:
+    method: "kmeans"
+    n_clusters: 5
+    random_state: 42
+  
+  churn:
+    algorithm: "random_forest"
+    test_size: 0.2
+    random_state: 42
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/pipeline.log"
