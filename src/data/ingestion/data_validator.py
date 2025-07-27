@@ -1,239 +1,248 @@
-# src/data/ingestion/data_validator.py
+# src/data/data_validator.py
+"""
+🔍 Data Validator - UNIQUEMENT validation qualité
+🎯 Single Responsibility: Validate data quality
+"""
+
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Any, Optional
-import logging
+from typing import Dict, List, Any, Optional, Tuple
+from dataclasses import dataclass
 from datetime import datetime
-import yaml
+import logging
+
+from config.settings import settings, get_logger
+
+logger = get_logger(__name__)
+
+@dataclass
+class ValidationResult:
+    """🔍 Résultat de validation"""
+    is_valid: bool
+    quality_score: float  # 0-100
+    errors: List[str]
+    warnings: List[str]
+    missing_columns: List[str]
+    data_quality_metrics: Dict[str, Any]
+    recommendations: List[str]
 
 class DataValidator:
-    """Classe pour valider la qualité et l'intégrité des données"""
+    """
+    🔍 Validateur de qualité des données
     
-    def __init__(self, config_path: str = "config/pipeline_settings.yaml"):
-        self.config = self._load_config(config_path)
-        self.logger = logging.getLogger(__name__)
-        self.validation_results = {}
-        
-    def _load_config(self, config_path: str) -> Dict[Any, Any]:
-        """Charge la configuration"""
-        with open(config_path, 'r') as file:
-            return yaml.safe_load(file)
+    ✅ Responsabilités:
+    - Validation schéma (colonnes obligatoires)
+    - Détection outliers
+    - Score de qualité
+    - Analyse valeurs manquantes
+    - Recommandations amélioration
+    """
     
-    def validate_schema(self, df: pd.DataFrame, expected_schema: Dict[str, str]) -> bool:
+    def __init__(self):
+        self.required_columns = settings.REQUIRED_COLUMNS
+        logger.info("🔍 DataValidator initialisé")
+    
+    def validate_dataset(
+        self,
+        df: pd.DataFrame,
+        dataset_name: str = "unknown"
+    ) -> ValidationResult:
         """
-        Valide que les colonnes correspondent au schéma attendu
+        🔍 Validation complète d'un dataset
         
         Args:
-            df: DataFrame à valider
-            expected_schema: Schéma attendu {colonne: type}
+            df: DataFrame à valider (données brutes)
+            dataset_name: Nom du dataset pour logs
             
         Returns:
-            bool: True si valide
+            ValidationResult avec score et recommandations
         """
-        validation_passed = True
-        issues = []
+        logger.info(f"🔍 Validation dataset: {dataset_name}")
         
-        # Vérifier les colonnes manquantes
-        missing_columns = set(expected_schema.keys()) - set(df.columns)
-        if missing_columns:
-            issues.append(f"Colonnes manquantes: {missing_columns}")
-            validation_passed = False
+        errors = []
+        warnings = []
+        recommendations = []
         
-        # Vérifier les colonnes supplémentaires
-        extra_columns = set(df.columns) - set(expected_schema.keys())
-        if extra_columns:
-            issues.append(f"Colonnes supplémentaires: {extra_columns}")
-            self.logger.warning(f"⚠️ Colonnes non attendues: {extra_columns}")
+        # 1️⃣ Validation schéma
+        missing_cols = self._validate_schema(df, errors, warnings)
         
-        # Vérifier les types de données
-        for col, expected_type in expected_schema.items():
-            if col in df.columns:
-                actual_type = str(df[col].dtype)
-                if not self._is_compatible_type(actual_type, expected_type):
-                    issues.append(f"Type incorrect pour {col}: attendu {expected_type}, reçu {actual_type}")
-                    validation_passed = False
+        # 2️⃣ Validation intégrité données
+        self._validate_data_integrity(df, errors, warnings, recommendations)
         
-        self.validation_results['schema_validation'] = {
-            'passed': validation_passed,
-            'issues': issues,
-            'timestamp': datetime.now().isoformat()
-        }
+        # 3️⃣ Calcul métriques qualité
+        quality_metrics = self._calculate_quality_metrics(df)
         
-        if validation_passed:
-            self.logger.info("✅ Validation du schéma réussie")
-        else:
-            self.logger.error(f"❌ Validation du schéma échouée: {issues}")
+        # 4️⃣ Score global
+        quality_score = self._calculate_quality_score(df, quality_metrics)
         
-        return validation_passed
+        # 5️⃣ Recommandations
+        recommendations.extend(self._generate_recommendations(df, quality_metrics))
+        
+        is_valid = len(errors) == 0 and quality_score >= 60
+        
+        result = ValidationResult(
+            is_valid=is_valid,
+            quality_score=quality_score,
+            errors=errors,
+            warnings=warnings,
+            missing_columns=missing_cols,
+            data_quality_metrics=quality_metrics,
+            recommendations=recommendations
+        )
+        
+        self._log_validation_result(result, dataset_name)
+        
+        return result
     
-    def _is_compatible_type(self, actual_type: str, expected_type: str) -> bool:
-        """Vérifie la compatibilité des types"""
-        type_mapping = {
-            'int64': ['int', 'integer', 'int64'],
-            'float64': ['float', 'numeric', 'float64'],
-            'object': ['string', 'object', 'text'],
-            'datetime64[ns]': ['datetime', 'timestamp', 'datetime64[ns]'],
-            'bool': ['boolean', 'bool']
-        }
+    def _validate_schema(self, df: pd.DataFrame, errors: List, warnings: List) -> List[str]:
+        """🏗️ Validation schéma (colonnes obligatoires)"""
         
-        if actual_type in type_mapping:
-            return expected_type.lower() in type_mapping[actual_type]
-        return False
+        missing_required = set(self.required_columns) - set(df.columns)
+        
+        if missing_required:
+            for col in missing_required:
+                errors.append(f"Colonne obligatoire manquante: {col}")
+        
+        # Colonnes vides
+        empty_columns = df.columns[df.isnull().all()].tolist()
+        if empty_columns:
+            warnings.append(f"Colonnes entièrement vides: {empty_columns}")
+        
+        return list(missing_required)
     
-    def validate_data_quality(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """
-        Effectue une validation complète de la qualité des données
+    def _validate_data_integrity(
+        self, 
+        df: pd.DataFrame, 
+        errors: List, 
+        warnings: List,
+        recommendations: List
+    ):
+        """🔍 Validation intégrité des données"""
         
-        Args:
-            df: DataFrame à valider
+        # Dataset vide
+        if len(df) == 0:
+            errors.append("Dataset vide (0 lignes)")
+            return
+        
+        # Lignes entièrement vides
+        empty_rows_pct = (df.isnull().all(axis=1).sum() / len(df)) * 100
+        if empty_rows_pct > 10:
+            warnings.append(f"{empty_rows_pct:.1f}% lignes entièrement vides")
+        
+        # Taux de valeurs manquantes critique
+        missing_pct = (df.isnull().sum().sum() / df.size) * 100
+        if missing_pct > 50:
+            errors.append(f"Trop de valeurs manquantes: {missing_pct:.1f}%")
+        elif missing_pct > 20:
+            warnings.append(f"Beaucoup de valeurs manquantes: {missing_pct:.1f}%")
+        
+        # Doublons
+        duplicates_pct = (df.duplicated().sum() / len(df)) * 100
+        if duplicates_pct > 20:
+            warnings.append(f"Beaucoup de doublons: {duplicates_pct:.1f}%")
+        
+        # Validation types de données
+        self._validate_data_types(df, warnings, recommendations)
+    
+    def _validate_data_types(
+        self, 
+        df: pd.DataFrame, 
+        warnings: List, 
+        recommendations: List
+    ):
+        """📊 Validation types de données"""
+        
+        for col in df.columns:
+            # Détection colonnes numériques stockées en texte
+            if df[col].dtype == 'object':
+                # Test si contient des nombres
+                sample = df[col].dropna().head(100)
+                if len(sample) > 0:
+                    numeric_count = sum(str(val).replace('.', '').replace(',', '').replace('-', '').isdigit() 
+                                      for val in sample)
+                    numeric_pct = numeric_count / len(sample)
+                    
+                    if numeric_pct > 0.8:
+                        recommendations.append(f"Colonne '{col}' semble numérique mais stockée en texte")
             
-        Returns:
-            Dict: Résultats de validation
-        """
-        quality_report = {
-            'total_rows': len(df),
-            'total_columns': len(df.columns),
-            'null_analysis': self._analyze_null_values(df),
-            'duplicate_analysis': self._analyze_duplicates(df),
-            'data_types_analysis': self._analyze_data_types(df),
-            'outlier_analysis': self._analyze_outliers(df),
-            'consistency_checks': self._check_consistency(df)
-        }
-        
-        # Calculer le score de qualité global
-        quality_score = self._calculate_quality_score(quality_report)
-        quality_report['quality_score'] = quality_score
-        
-        self.validation_results['data_quality'] = quality_report
-        
-        self.logger.info(f"📊 Score de qualité des données: {quality_score:.2f}/100")
-        
-        return quality_report
+            # Détection colonnes de dates
+            if df[col].dtype == 'object' and any(keyword in col.lower() 
+                                               for keyword in ['date', 'time', 'created', 'updated']):
+                recommendations.append(f"Colonne '{col}' semble être une date à convertir")
     
-    def _analyze_null_values(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Analyse les valeurs manquantes"""
-        null_counts = df.isnull().sum()
-        null_percentages = (null_counts / len(df)) * 100
-        
-        problematic_columns = null_percentages[null_percentages > 50].to_dict()
+    def _calculate_quality_metrics(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """📊 Calcul métriques de qualité détaillées"""
         
         return {
-            'null_counts': null_counts.to_dict(),
-            'null_percentages': null_percentages.to_dict(),
-            'problematic_columns': problematic_columns,
-            'total_null_values': null_counts.sum()
+            "total_rows": len(df),
+            "total_columns": len(df.columns),
+            "missing_values_count": df.isnull().sum().sum(),
+            "missing_values_pct": (df.isnull().sum().sum() / df.size) * 100,
+            "duplicate_rows": df.duplicated().sum(),
+            "duplicate_rows_pct": (df.duplicated().sum() / len(df)) * 100,
+            "empty_rows": df.isnull().all(axis=1).sum(),
+            "empty_columns": df.isnull().all().sum(),
+            "unique_rows_pct": (df.drop_duplicates().shape[0] / len(df)) * 100,
+            "data_types": df.dtypes.value_counts().to_dict(),
+            "memory_usage_mb": df.memory_usage(deep=True).sum() / 1024 / 1024
         }
     
-    def _analyze_duplicates(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Analyse les doublons"""
-        duplicate_rows = df.duplicated().sum()
-        duplicate_percentage = (duplicate_rows / len(df)) * 100
+    def _calculate_quality_score(self, df: pd.DataFrame, metrics: Dict) -> float:
+        """🏆 Calcul score qualité (0-100)"""
         
-        return {
-            'duplicate_rows': duplicate_rows,
-            'duplicate_percentage': duplicate_percentage,
-            'unique_rows': len(df) - duplicate_rows
-        }
-    
-    def _analyze_data_types(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Analyse les types de données"""
-        dtype_counts = df.dtypes.value_counts().to_dict()
-        
-        return {
-            'data_types': df.dtypes.to_dict(),
-            'type_distribution': {str(k): v for k, v in dtype_counts.items()}
-        }
-    
-    def _analyze_outliers(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Analyse les valeurs aberrantes pour les colonnes numériques"""
-        numeric_columns = df.select_dtypes(include=[np.number]).columns
-        outlier_analysis = {}
-        
-        for col in numeric_columns:
-            Q1 = df[col].quantile(0.25)
-            Q3 = df[col].quantile(0.75)
-            IQR = Q3 - Q1
-            
-            lower_bound = Q1 - 1.5 * IQR
-            upper_bound = Q3 + 1.5 * IQR
-            
-            outliers = df[(df[col] < lower_bound) | (df[col] > upper_bound)]
-            
-            outlier_analysis[col] = {
-                'outlier_count': len(outliers),
-                'outlier_percentage': (len(outliers) / len(df)) * 100,
-                'lower_bound': lower_bound,
-                'upper_bound': upper_bound,
-                'min_value': df[col].min(),
-                'max_value': df[col].max()
-            }
-        
-        return outlier_analysis
-    
-    def _check_consistency(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Vérifie la cohérence des données (spécifique e-commerce)"""
-        consistency_issues = []
-        
-        # Vérifications spécifiques pour données e-commerce
-        if 'Quantity' in df.columns:
-            negative_quantities = (df['Quantity'] < 0).sum()
-            if negative_quantities > 0:
-                consistency_issues.append(f"Quantités négatives: {negative_quantities}")
-        
-        if 'UnitPrice' in df.columns:
-            negative_prices = (df['UnitPrice'] < 0).sum()
-            if negative_prices > 0:
-                consistency_issues.append(f"Prix négatifs: {negative_prices}")
-        
-        if 'CustomerID' in df.columns:
-            invalid_customer_ids = df['CustomerID'].isna().sum()
-            if invalid_customer_ids > 0:
-                consistency_issues.append(f"CustomerID manquants: {invalid_customer_ids}")
-        
-        return {
-            'consistency_issues': consistency_issues,
-            'issues_count': len(consistency_issues)
-        }
-    
-    def _calculate_quality_score(self, quality_report: Dict[str, Any]) -> float:
-        """Calcule un score de qualité global"""
         score = 100.0
         
-        # Pénalités pour valeurs manquantes
-        avg_null_percentage = np.mean(list(quality_report['null_analysis']['null_percentages'].values()))
-        score -= avg_null_percentage * 0.5
+        # Pénalités
+        score -= metrics["missing_values_pct"] * 1.5  # -1.5 par % manquant
+        score -= metrics["duplicate_rows_pct"] * 1.0  # -1.0 par % doublons
+        score -= (metrics["empty_columns"] / metrics["total_columns"]) * 20  # -20 par colonne vide
         
-        # Pénalités pour doublons
-        duplicate_penalty = quality_report['duplicate_analysis']['duplicate_percentage'] * 0.3
-        score -= duplicate_penalty
-        
-        # Pénalités pour problèmes de cohérence
-        consistency_penalty = quality_report['consistency_checks']['issues_count'] * 10
-        score -= consistency_penalty
+        # Bonus
+        if metrics["total_rows"] >= 1000:
+            score += 10
+        if metrics["total_columns"] >= 5:
+            score += 5
         
         return max(0, min(100, score))
     
-    def generate_validation_report(self) -> str:
-        """Génère un rapport de validation détaillé"""
-        if not self.validation_results:
-            return "Aucune validation effectuée"
+    def _generate_recommendations(self, df: pd.DataFrame, metrics: Dict) -> List[str]:
+        """💡 Génération recommandations"""
         
-        report = []
-        report.append("=" * 50)
-        report.append("RAPPORT DE VALIDATION DES DONNÉES")
-        report.append("=" * 50)
+        recommendations = []
         
-        for validation_type, results in self.validation_results.items():
-            report.append(f"\n{validation_type.upper()}:")
-            report.append("-" * 30)
-            
-            if isinstance(results, dict):
-                for key, value in results.items():
-                    if isinstance(value, dict):
-                        report.append(f"{key}:")
-                        for sub_key, sub_value in value.items():
-                            report.append(f"  {sub_key}: {sub_value}")
-                    else:
-                        report.append(f"{key}: {value}")
+        if metrics["missing_values_pct"] > 10:
+            recommendations.append("Considérer imputation des valeurs manquantes")
         
-        return "\n".join(report)
+        if metrics["duplicate_rows_pct"] > 5:
+            recommendations.append("Supprimer les doublons identifiés")
+        
+        if metrics["empty_columns"] > 0:
+            recommendations.append("Supprimer les colonnes entièrement vides")
+        
+        if metrics["memory_usage_mb"] > 100:
+            recommendations.append("Optimiser les types de données pour réduire la mémoire")
+        
+        return recommendations
+    
+    def _log_validation_result(self, result: ValidationResult, dataset_name: str):
+        """📝 Log résultat validation"""
+        
+        status = "✅ VALIDE" if result.is_valid else "❌ INVALIDE"
+        logger.info(f"{status} | {dataset_name} | Score: {result.quality_score:.1f}/100")
+        
+        if result.errors:
+            for error in result.errors:
+                logger.error(f"❌ {error}")
+        
+        if result.warnings:
+            for warning in result.warnings:
+                logger.warning(f"⚠️ {warning}")
+    
+    def quick_check(self, df: pd.DataFrame) -> bool:
+        """⚡ Validation rapide (True/False)"""
+        result = self.validate_dataset(df)
+        return result.is_valid
+
+def create_data_validator() -> DataValidator:
+    """🏭 Factory function"""
+    return DataValidator()
